@@ -45,6 +45,11 @@ func (t *Timer) ElapsedTime() time.Duration {
 	return time.Since(t.start)
 }
 
+// Return the duration value of the timer (in ns).
+func (t *Timer) Duration() time.Duration {
+	return t.duration
+}
+
 // Return a string representation of the Timer.
 func (t *Timer) String() string {
 	return fmt.Sprintf("%s: %s", t.name, t.duration)

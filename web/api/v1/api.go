@@ -32,6 +32,7 @@ import (
 	"github.com/prometheus/prometheus/storage/local"
 	"github.com/prometheus/prometheus/storage/metric"
 	"github.com/prometheus/prometheus/util/httputil"
+	"github.com/prometheus/prometheus/util/stats"
 )
 
 type status string
@@ -148,9 +149,16 @@ func (api *API) Register(r *route.Router) {
 	r.Get("/alertmanagers", instr("alertmanagers", api.alertmanagers))
 }
 
+type queryStats struct {
+	ExecQueueTime time.Duration `json:"execQueueTimeNs"`
+	ExecTotalTime time.Duration `json:"execTotalTimeNs"`
+	TotalEvalTime time.Duration `json:"totalEvalTimeNs"`
+}
+
 type queryData struct {
 	ResultType model.ValueType `json:"resultType"`
 	Result     model.Value     `json:"result"`
+	Stats      *queryStats     `json:"stats,omitempty"`
 }
 
 func (api *API) options(r *http.Request) (interface{}, *apiError) {
@@ -236,9 +244,23 @@ func (api *API) queryRange(r *http.Request) (interface{}, *apiError) {
 		}
 		return nil, &apiError{errorExec, res.Err}
 	}
+
+	// optional stats field in response if parameter "stats" is set
+	var qs *queryStats
+	if s := r.FormValue("stats"); s != "" {
+		qs = &queryStats{
+			ExecQueueTime: qry.Stats().GetTimer(stats.ExecQueueTime).Duration(),
+			ExecTotalTime: qry.Stats().GetTimer(stats.ExecTotalTime).Duration(),
+			TotalEvalTime: qry.Stats().GetTimer(stats.TotalEvalTime).Duration(),
+		}
+	} else {
+		qs = nil
+	}
+
 	return &queryData{
 		ResultType: res.Value.Type(),
 		Result:     res.Value,
+		Stats:      qs,
 	}, nil
 }
 

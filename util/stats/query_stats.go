@@ -25,6 +25,7 @@ const (
 	InnerEvalTime
 	ResultAppendTime
 	ExecQueueTime
+	ExecTotalTime
 )
 
 // Return a string representation of a QueryTiming identifier.
@@ -42,6 +43,8 @@ func (s QueryTiming) String() string {
 		return "Result append time"
 	case ExecQueueTime:
 		return "Exec queue wait time"
+	case ExecTotalTime:
+		return "Exec queue total time"
 	default:
 		return "Unknown query timing"
 	}
