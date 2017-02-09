@@ -45,7 +45,7 @@ func (t *Timer) ElapsedTime() time.Duration {
 	return time.Since(t.start)
 }
 
-// Return the duration value of the timer (in ns).
+// Duration returns the duration value of the timer (in ns).
 func (t *Timer) Duration() time.Duration {
 	return t.duration
 }
