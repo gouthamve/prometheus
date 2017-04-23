@@ -44,7 +44,7 @@ func (s QueryTiming) String() string {
 	case ExecQueueTime:
 		return "Exec queue wait time"
 	case ExecTotalTime:
-		return "Exec queue total time"
+		return "Exec total time"
 	default:
 		return "Unknown query timing"
 	}
