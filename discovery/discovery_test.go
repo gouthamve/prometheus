@@ -18,8 +18,11 @@ import (
 
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/prometheus/config"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
 	yaml "gopkg.in/yaml.v2"
+
+	k8sinteg "github.com/prometheus/prometheus/discovery/kubernetes/integration"
 )
 
 func TestTargetSetRecreatesTargetGroupsEveryRun(t *testing.T) {
@@ -83,4 +86,21 @@ func (s *mockSyncer) Sync(tgs []*config.TargetGroup) {
 	if s.sync != nil {
 		s.sync(tgs)
 	}
+}
+
+type IntegrationTester interface {
+	Launch() error
+	Test(t *testing.T)
+	Teardown() error
+}
+
+func testSDFramework(t *testing.T, it IntegrationTester) {
+	require.NoError(t, it.Launch())
+	defer it.Teardown()
+
+	it.Test(t)
+}
+
+func TestSDFrameworks(t *testing.T) {
+	testSDFramework(t, k8sinteg.NewIntegrationTester())
 }

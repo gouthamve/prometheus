@@ -1,0 +1,47 @@
+etcd:
+  image: quay.io/coreos/etcd:v3.2.2
+  command: |
+    /usr/local/bin/etcd --name master --data-dir /var/lib/etcd --heartbeat-interval 200 --election-timeout 5000 --advertise-client-urls "http://localhost:2379" --listen-client-urls "http://0.0.0.0:2379" --listen-peer-urls "http://0.0.0.0:2380"
+
+api-server:
+  image: quay.io/coreos/hyperkube:v1.7.0_coreos.0
+  links:
+    - etcd
+  ports:
+    - "8080:8080" # for docker-for-mac
+  command: /hyperkube apiserver --insecure-port=8080 --etcd-quorum-read=true --etcd-servers=http://etcd:2379 --storage-backend=etcd3 --kubelet-https=false --service-cluster-ip-range=10.3.0.0/16 --insecure-bind-address=0.0.0.0
+
+controller-manager:
+  image: quay.io/coreos/hyperkube:v1.7.0_coreos.0
+  links:
+    - api-server
+  command: |
+    /hyperkube controller-manager --leader-elect=true --cluster-cidr=10.2.0.0/16 --master=http://api-server:8080
+
+kubelet:
+  image: quay.io/coreos/hyperkube:v1.7.0_coreos.0
+  privileged: true
+  links:
+    - api-server
+  volumes:
+  - /sys:/sys:ro
+  - /dev:/dev
+  - /var/lib/docker/:/var/lib/docker:ro
+  - /var/run:/var/run:rw
+  command: |
+    /hyperkube kubelet --api_servers=http://api-server:8080 --enable-server=true --pod-manifest-path=/etc/kubernetes/manifests
+
+proxy:
+  image: quay.io/coreos/hyperkube:v1.7.0_coreos.0
+  privileged: true
+  links:
+    - api-server
+  command: |
+    /hyperkube proxy --cluster-cidr=10.2.0.0/16 --master=http://api-server:8080
+
+scheduler:
+  image: quay.io/coreos/hyperkube:v1.7.0_coreos.0
+  links:
+    - api-server
+  command: |
+    /hyperkube scheduler --leader-elect --master=http://api-server:8080
