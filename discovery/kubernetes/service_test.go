@@ -17,11 +17,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/config"
-	"k8s.io/client-go/1.5/pkg/api/v1"
-	"k8s.io/client-go/1.5/tools/cache"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/tools/cache"
 )
 
 func serviceStoreKeyFunc(obj interface{}) (string, error) {
@@ -34,12 +34,12 @@ func newFakeServiceInformer() *fakeInformer {
 
 func makeTestServiceDiscovery() (*Service, *fakeInformer) {
 	i := newFakeServiceInformer()
-	return NewService(log.Base(), i), i
+	return NewService(nil, i), i
 }
 
 func makeMultiPortService() *v1.Service {
 	return &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:        "testservice",
 			Namespace:   "default",
 			Labels:      map[string]string{"testlabel": "testvalue"},
@@ -47,12 +47,12 @@ func makeMultiPortService() *v1.Service {
 		},
 		Spec: v1.ServiceSpec{
 			Ports: []v1.ServicePort{
-				v1.ServicePort{
+				{
 					Name:     "testport0",
 					Protocol: v1.ProtocolTCP,
 					Port:     int32(30900),
 				},
-				v1.ServicePort{
+				{
 					Name:     "testport1",
 					Protocol: v1.ProtocolUDP,
 					Port:     int32(30901),
@@ -64,13 +64,13 @@ func makeMultiPortService() *v1.Service {
 
 func makeSuffixedService(suffix string) *v1.Service {
 	return &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("testservice%s", suffix),
 			Namespace: "default",
 		},
 		Spec: v1.ServiceSpec{
 			Ports: []v1.ServicePort{
-				v1.ServicePort{
+				{
 					Name:     "testport",
 					Protocol: v1.ProtocolTCP,
 					Port:     int32(30900),
@@ -91,14 +91,14 @@ func TestServiceDiscoveryInitial(t *testing.T) {
 	k8sDiscoveryTest{
 		discovery: n,
 		expectedInitial: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Targets: []model.LabelSet{
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "TCP",
 						"__address__":                             "testservice.default.svc:30900",
 						"__meta_kubernetes_service_port_name":     "testport0",
 					},
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "UDP",
 						"__address__":                             "testservice.default.svc:30901",
 						"__meta_kubernetes_service_port_name":     "testport1",
@@ -123,9 +123,9 @@ func TestServiceDiscoveryAdd(t *testing.T) {
 		discovery:  n,
 		afterStart: func() { go func() { i.Add(makeService()) }() },
 		expectedRes: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Targets: []model.LabelSet{
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "TCP",
 						"__address__":                             "testservice.default.svc:30900",
 						"__meta_kubernetes_service_port_name":     "testport",
@@ -149,9 +149,9 @@ func TestServiceDiscoveryDelete(t *testing.T) {
 		discovery:  n,
 		afterStart: func() { go func() { i.Delete(makeService()) }() },
 		expectedInitial: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Targets: []model.LabelSet{
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "TCP",
 						"__address__":                             "testservice.default.svc:30900",
 						"__meta_kubernetes_service_port_name":     "testport",
@@ -165,7 +165,7 @@ func TestServiceDiscoveryDelete(t *testing.T) {
 			},
 		},
 		expectedRes: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Source: "svc/default/testservice",
 			},
 		},
@@ -180,9 +180,9 @@ func TestServiceDiscoveryDeleteUnknownCacheState(t *testing.T) {
 		discovery:  n,
 		afterStart: func() { go func() { i.Delete(cache.DeletedFinalStateUnknown{Obj: makeService()}) }() },
 		expectedInitial: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Targets: []model.LabelSet{
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "TCP",
 						"__address__":                             "testservice.default.svc:30900",
 						"__meta_kubernetes_service_port_name":     "testport",
@@ -196,7 +196,7 @@ func TestServiceDiscoveryDeleteUnknownCacheState(t *testing.T) {
 			},
 		},
 		expectedRes: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Source: "svc/default/testservice",
 			},
 		},
@@ -211,9 +211,9 @@ func TestServiceDiscoveryUpdate(t *testing.T) {
 		discovery:  n,
 		afterStart: func() { go func() { i.Update(makeMultiPortService()) }() },
 		expectedInitial: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Targets: []model.LabelSet{
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "TCP",
 						"__address__":                             "testservice.default.svc:30900",
 						"__meta_kubernetes_service_port_name":     "testport",
@@ -227,14 +227,14 @@ func TestServiceDiscoveryUpdate(t *testing.T) {
 			},
 		},
 		expectedRes: []*config.TargetGroup{
-			&config.TargetGroup{
+			{
 				Targets: []model.LabelSet{
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "TCP",
 						"__address__":                             "testservice.default.svc:30900",
 						"__meta_kubernetes_service_port_name":     "testport0",
 					},
-					model.LabelSet{
+					{
 						"__meta_kubernetes_service_port_protocol": "UDP",
 						"__address__":                             "testservice.default.svc:30901",
 						"__meta_kubernetes_service_port_name":     "testport1",

@@ -14,17 +14,19 @@
 package file
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/model"
-	"golang.org/x/net/context"
 	"gopkg.in/fsnotify.v1"
 	"gopkg.in/yaml.v2"
 
@@ -51,10 +53,10 @@ func init() {
 	prometheus.MustRegister(fileSDReadErrorsCount)
 }
 
-// FileDiscovery provides service discovery functionality based
+// Discovery provides service discovery functionality based
 // on files that contain target groups in JSON or YAML format. Refreshing
 // happens using file watches and periodic refreshes.
-type FileDiscovery struct {
+type Discovery struct {
 	paths    []string
 	watcher  *fsnotify.Watcher
 	interval time.Duration
@@ -63,23 +65,28 @@ type FileDiscovery struct {
 	// and how many target groups they contained.
 	// This is used to detect deleted target groups.
 	lastRefresh map[string]int
+	logger      log.Logger
 }
 
 // NewDiscovery returns a new file discovery for the given paths.
-func NewDiscovery(conf *config.FileSDConfig) *FileDiscovery {
-	return &FileDiscovery{
+func NewDiscovery(conf *config.FileSDConfig, logger log.Logger) *Discovery {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
+	return &Discovery{
 		paths:    conf.Files,
 		interval: time.Duration(conf.RefreshInterval),
+		logger:   logger,
 	}
 }
 
 // listFiles returns a list of all files that match the configured patterns.
-func (fd *FileDiscovery) listFiles() []string {
+func (d *Discovery) listFiles() []string {
 	var paths []string
-	for _, p := range fd.paths {
+	for _, p := range d.paths {
 		files, err := filepath.Glob(p)
 		if err != nil {
-			log.Errorf("Error expanding glob %q: %s", p, err)
+			level.Error(d.logger).Log("msg", "Error expanding glob", "glob", p, "err", err)
 			continue
 		}
 		paths = append(paths, files...)
@@ -89,36 +96,36 @@ func (fd *FileDiscovery) listFiles() []string {
 
 // watchFiles sets watches on all full paths or directories that were configured for
 // this file discovery.
-func (fd *FileDiscovery) watchFiles() {
-	if fd.watcher == nil {
+func (d *Discovery) watchFiles() {
+	if d.watcher == nil {
 		panic("no watcher configured")
 	}
-	for _, p := range fd.paths {
+	for _, p := range d.paths {
 		if idx := strings.LastIndex(p, "/"); idx > -1 {
 			p = p[:idx]
 		} else {
 			p = "./"
 		}
-		if err := fd.watcher.Add(p); err != nil {
-			log.Errorf("Error adding file watch for %q: %s", p, err)
+		if err := d.watcher.Add(p); err != nil {
+			level.Error(d.logger).Log("msg", "Error adding file watch", "path", p, "err", err)
 		}
 	}
 }
 
 // Run implements the TargetProvider interface.
-func (fd *FileDiscovery) Run(ctx context.Context, ch chan<- []*config.TargetGroup) {
-	defer fd.stop()
+func (d *Discovery) Run(ctx context.Context, ch chan<- []*config.TargetGroup) {
+	defer d.stop()
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Errorf("Error creating file watcher: %s", err)
+		level.Error(d.logger).Log("msg", "Error adding file watcher", "err", err)
 		return
 	}
-	fd.watcher = watcher
+	d.watcher = watcher
 
-	fd.refresh(ctx, ch)
+	d.refresh(ctx, ch)
 
-	ticker := time.NewTicker(fd.interval)
+	ticker := time.NewTicker(d.interval)
 	defer ticker.Stop()
 
 	for {
@@ -126,7 +133,7 @@ func (fd *FileDiscovery) Run(ctx context.Context, ch chan<- []*config.TargetGrou
 		case <-ctx.Done():
 			return
 
-		case event := <-fd.watcher.Events:
+		case event := <-d.watcher.Events:
 			// fsnotify sometimes sends a bunch of events without name or operation.
 			// It's unclear what they are and why they are sent - filter them out.
 			if len(event.Name) == 0 {
@@ -140,24 +147,24 @@ func (fd *FileDiscovery) Run(ctx context.Context, ch chan<- []*config.TargetGrou
 			// different combinations of operations. For all practical purposes
 			// this is inaccurate.
 			// The most reliable solution is to reload everything if anything happens.
-			fd.refresh(ctx, ch)
+			d.refresh(ctx, ch)
 
 		case <-ticker.C:
 			// Setting a new watch after an update might fail. Make sure we don't lose
 			// those files forever.
-			fd.refresh(ctx, ch)
+			d.refresh(ctx, ch)
 
-		case err := <-fd.watcher.Errors:
+		case err := <-d.watcher.Errors:
 			if err != nil {
-				log.Errorf("Error on file watch: %s", err)
+				level.Error(d.logger).Log("msg", "Error watching file", "err", err)
 			}
 		}
 	}
 }
 
 // stop shuts down the file watcher.
-func (fd *FileDiscovery) stop() {
-	log.Debugf("Stopping file discovery for %s...", fd.paths)
+func (d *Discovery) stop() {
+	level.Debug(d.logger).Log("msg", "Stopping file discovery...", "paths", d.paths)
 
 	done := make(chan struct{})
 	defer close(done)
@@ -166,37 +173,38 @@ func (fd *FileDiscovery) stop() {
 	go func() {
 		for {
 			select {
-			case <-fd.watcher.Errors:
-			case <-fd.watcher.Events:
+			case <-d.watcher.Errors:
+			case <-d.watcher.Events:
 				// Drain all events and errors.
 			case <-done:
 				return
 			}
 		}
 	}()
-	if err := fd.watcher.Close(); err != nil {
-		log.Errorf("Error closing file watcher for %s: %s", fd.paths, err)
+	if err := d.watcher.Close(); err != nil {
+		level.Error(d.logger).Log("msg", "Error closing file watcher", "paths", d.paths, "err", err)
 	}
 
-	log.Debugf("File discovery for %s stopped.", fd.paths)
+	level.Debug(d.logger).Log("File discovery stopped", "paths", d.paths)
 }
 
 // refresh reads all files matching the discovery's patterns and sends the respective
 // updated target groups through the channel.
-func (fd *FileDiscovery) refresh(ctx context.Context, ch chan<- []*config.TargetGroup) {
+func (d *Discovery) refresh(ctx context.Context, ch chan<- []*config.TargetGroup) {
 	t0 := time.Now()
 	defer func() {
 		fileSDScanDuration.Observe(time.Since(t0).Seconds())
 	}()
 
 	ref := map[string]int{}
-	for _, p := range fd.listFiles() {
+	for _, p := range d.listFiles() {
 		tgroups, err := readFile(p)
 		if err != nil {
 			fileSDReadErrorsCount.Inc()
-			log.Errorf("Error reading file %q: %s", p, err)
+
+			level.Error(d.logger).Log("msg", "Error reading file", "path", p, "err", err)
 			// Prevent deletion down below.
-			ref[p] = fd.lastRefresh[p]
+			ref[p] = d.lastRefresh[p]
 			continue
 		}
 		select {
@@ -208,7 +216,7 @@ func (fd *FileDiscovery) refresh(ctx context.Context, ch chan<- []*config.Target
 		ref[p] = len(tgroups)
 	}
 	// Send empty updates for sources that disappeared.
-	for f, n := range fd.lastRefresh {
+	for f, n := range d.lastRefresh {
 		m, ok := ref[f]
 		if !ok || n > m {
 			for i := m; i < n; i++ {
@@ -220,9 +228,9 @@ func (fd *FileDiscovery) refresh(ctx context.Context, ch chan<- []*config.Target
 			}
 		}
 	}
-	fd.lastRefresh = ref
+	d.lastRefresh = ref
 
-	fd.watchFiles()
+	d.watchFiles()
 }
 
 // fileSource returns a source ID for the i-th target group in the file.
@@ -254,6 +262,11 @@ func readFile(filename string) ([]*config.TargetGroup, error) {
 	}
 
 	for i, tg := range targetGroups {
+		if tg == nil {
+			err = errors.New("nil target group item found")
+			return nil, err
+		}
+
 		tg.Source = fileSource(filename, i)
 		if tg.Labels == nil {
 			tg.Labels = model.LabelSet{}

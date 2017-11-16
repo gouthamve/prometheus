@@ -1,3 +1,194 @@
+## 2.0.0 / 2017-11-08
+
+This release includes a completely rewritten storage, huge performance
+improvements, but also many backwards incompatible changes. For more
+information, read the announcement blog post and migration guide.
+
+https://prometheus.io/blog/2017/11/08/announcing-prometheus-2-0/
+https://prometheus.io/docs/prometheus/2.0/migration/
+
+* [CHANGE] Completely rewritten storage layer, with WAL. This is not backwards compatible with 1.x storage, and many flags have changed/disappeared.
+* [CHANGE] New staleness behavior. Series now marked stale after target scrapes no longer return them, and soon after targets disappear from service discovery.
+* [CHANGE] Rules files use YAML syntax now. Conversion tool added to promtool.
+* [CHANGE] Removed `count_scalar`, `drop_common_labels` functions and `keep_common` modifier from PromQL.
+* [CHANGE] Rewritten exposition format parser with much higher performance. The Protobuf exposition format is no longer supported.
+* [CHANGE] Example console templates updated for new storage and metrics names. Examples other than node exporter and Prometheus removed.
+* [CHANGE] Admin and lifecycle APIs now disabled by default, can be reenabled via flags
+* [CHANGE] Flags switched to using Kingpin, all flags are now --flagname rather than -flagname.
+* [FEATURE/CHANGE] Remote read can be configured to not read data which is available locally. This is enabled by default.
+* [FEATURE] Rules can be grouped now. Rules within a rule group are executed sequentially.
+* [FEATURE] Added experimental GRPC apis
+* [FEATURE] Add timestamp() function to PromQL.
+* [ENHANCEMENT] Remove remote read from the query path if no remote storage is configured.
+* [ENHANCEMENT] Bump Consul HTTP client timeout to not match the Consul SD watch timeout.
+* [ENHANCEMENT] Go-conntrack added to provide HTTP connection metrics.
+* [BUGFIX] Fix connection leak in Consul SD.
+
+## 1.8.2 / 2017-11-04
+
+* [BUGFIX] EC2 service discovery: Do not crash if tags are empty.
+
+## 1.8.1 / 2017-10-19
+
+* [BUGFIX] Correctly handle external labels on remote read endpoint
+
+## 1.8.0 / 2017-10-06
+
+* [CHANGE] Rule links link to the _Console_ tab rather than the _Graph_ tab to
+  not trigger expensive range queries by default.
+* [FEATURE] Ability to act as a remote read endpoint for other Prometheus
+  servers.
+* [FEATURE] K8s SD: Support discovery of ingresses.
+* [FEATURE] Consul SD: Support for node metadata.
+* [FEATURE] Openstack SD: Support discovery of hypervisors.
+* [FEATURE] Expose current Prometheus config via `/status/config`.
+* [FEATURE] Allow to collapse jobs on `/targets` page.
+* [FEATURE] Add `/-/healthy` and `/-/ready` endpoints.
+* [FEATURE] Add color scheme support to console templates.
+* [ENHANCEMENT] Remote storage connections use HTTP keep-alive.
+* [ENHANCEMENT] Improved logging about remote storage.
+* [ENHANCEMENT] Relaxed URL validation.
+* [ENHANCEMENT] Openstack SD: Handle instances without IP.
+* [ENHANCEMENT] Make remote storage queue manager configurable.
+* [ENHANCEMENT] Validate metrics returned from remote read.
+* [ENHANCEMENT] EC2 SD: Set a default region.
+* [ENHANCEMENT] Changed help link to `https://prometheus.io/docs`.
+* [BUGFIX] Fix floating-point precision issue in `deriv` function.
+* [BUGFIX] Fix pprof endpoints when -web.route-prefix or -web.external-url is
+  used.
+* [BUGFIX] Fix handling of `null` target groups in file-based SD.
+* [BUGFIX] Set the sample timestamp in date-related PromQL functions.
+* [BUGFIX] Apply path prefix to redirect from deprecated graph URL.
+* [BUGFIX] Fixed tests on MS Windows.
+* [BUGFIX] Check for invalid UTF-8 in label values after relabeling.
+
+## 1.7.2 / 2017-09-26
+
+* [BUGFIX] Correctly remove all targets from DNS service discovery if the
+  corresponding DNS query succeeds and returns an empty result.
+* [BUGFIX] Correctly parse resolution input in expression browser.
+* [BUGFIX] Consistently use UTC in the date picker of the expression browser.
+* [BUGFIX] Correctly handle multiple ports in Marathon service discovery.
+* [BUGFIX] Fix HTML escaping so that HTML templates compile with Go1.9.
+* [BUGFIX] Prevent number of remote write shards from going negative.
+* [BUGFIX] In the graphs created by the expression browser, render very large
+  and small numbers in a readable way.
+* [BUGFIX] Fix a rarely occurring iterator issue in varbit encoded chunks.
+
+## 1.7.1 / 2017-06-12
+
+* [BUGFIX] Fix double prefix redirect.
+
+## 1.7.0 / 2017-06-06
+
+* [CHANGE] Compress remote storage requests and responses with unframed/raw snappy.
+* [CHANGE] Properly ellide secrets in config.
+* [FEATURE] Add OpenStack service discovery.
+* [FEATURE] Add ability to limit Kubernetes service discovery to certain namespaces.
+* [FEATURE] Add metric for discovered number of Alertmanagers.
+* [ENHANCEMENT] Print system information (uname) on start up.
+* [ENHANCEMENT] Show gaps in graphs on expression browser.
+* [ENHANCEMENT] Promtool linter checks counter naming and more reserved labels.
+* [BUGFIX] Fix broken Mesos discovery.
+* [BUGFIX] Fix redirect when external URL is set.
+* [BUGFIX] Fix mutation of active alert elements by notifier.
+* [BUGFIX] Fix HTTP error handling for remote write.
+* [BUGFIX] Fix builds for Solaris/Illumos.
+* [BUGFIX] Fix overflow checking in global config.
+* [BUGFIX] Fix log level reporting issue.
+* [BUGFIX] Fix ZooKeeper serverset discovery can become out-of-sync.
+
+## 1.6.3 / 2017-05-18
+
+* [BUGFIX] Fix disappearing Alertmanger targets in Alertmanager discovery.
+* [BUGFIX] Fix panic with remote_write on ARMv7.
+* [BUGFIX] Fix stacked graphs to adapt min/max values.
+
+## 1.6.2 / 2017-05-11
+
+* [BUGFIX] Fix potential memory leak in Kubernetes service discovery
+
+## 1.6.1 / 2017-04-19
+
+* [BUGFIX] Don't panic if storage has no FPs even after initial wait
+
+## 1.6.0 / 2017-04-14
+
+* [CHANGE] Replaced the remote write implementations for various backends by a
+  generic write interface with example adapter implementation for various
+  backends. Note that both the previous and the current remote write
+  implementations are **experimental**.
+* [FEATURE] New flag `-storage.local.target-heap-size` to tell Prometheus about
+  the desired heap size. This deprecates the flags
+  `-storage.local.memory-chunks` and `-storage.local.max-chunks-to-persist`,
+  which are kept for backward compatibility.
+* [FEATURE] Add `check-metrics` to `promtool` to lint metric names.
+* [FEATURE] Add Joyent Triton discovery.
+* [FEATURE] `X-Prometheus-Scrape-Timeout-Seconds` header in HTTP scrape
+  requests.
+* [FEATURE] Remote read interface, including example for InfluxDB. **Experimental.**
+* [FEATURE] Enable Consul SD to connect via TLS.
+* [FEATURE] Marathon SD supports multiple ports.
+* [FEATURE] Marathon SD supports bearer token for authentication.
+* [FEATURE] Custom timeout for queries.
+* [FEATURE] Expose `buildQueryUrl` in `graph.js`.
+* [FEATURE] Add `rickshawGraph` property to the graph object in console
+  templates.
+* [FEATURE] New metrics exported by Prometheus itself:
+  * Summary `prometheus_engine_query_duration_seconds`
+  * Counter `prometheus_evaluator_iterations_missed_total`
+  * Counter `prometheus_evaluator_iterations_total`
+  * Gauge `prometheus_local_storage_open_head_chunks`
+  * Gauge `prometheus_local_storage_target_heap_size`
+* [ENHANCEMENT] Reduce shut-down time by interrupting an ongoing checkpoint
+  before starting the final checkpoint.
+* [ENHANCEMENT] Auto-tweak times between checkpoints to limit time spent in
+  checkpointing to 50%.
+* [ENHANCEMENT] Improved crash recovery deals better with certain index
+  corruptions.
+* [ENHANCEMENT] Graphing deals better with constant time series.
+* [ENHANCEMENT] Retry remote writes on recoverable errors.
+* [ENHANCEMENT] Evict unused chunk descriptors during crash recovery to limit
+  memory usage.
+* [ENHANCEMENT] Smoother disk usage during series maintenance.
+* [ENHANCEMENT] Targets on targets page sorted by instance within a job.
+* [ENHANCEMENT] Sort labels in federation.
+* [ENHANCEMENT] Set `GOGC=40` by default, which results in much better memory
+  utilization at the price of slightly higher CPU usage. If `GOGC` is set by
+  the user, it is still honored as usual.
+* [ENHANCEMENT] Close head chunks after being idle for the duration of the
+  configured staleness delta. This helps to persist and evict head chunk of
+  stale series more quickly.
+* [ENHANCEMENT] Stricter checking of relabel config.
+* [ENHANCEMENT] Cache busters for static web content.
+* [ENHANCEMENT] Send Prometheus-specific user-agent header during scrapes.
+* [ENHANCEMENT] Improved performance of series retention cut-off.
+* [ENHANCEMENT] Mitigate impact of non-atomic sample ingestion on
+  `histogram_quantile` by enforcing buckets to be monotonic.
+* [ENHANCEMENT] Released binaries built with Go 1.8.1.
+* [BUGFIX] Send `instance=""` with federation if `instance` not set.
+* [BUGFIX] Update to new `client_golang` to get rid of unwanted quantile
+  metrics in summaries.
+* [BUGFIX] Introduce several additional guards against data corruption.
+* [BUGFIX] Mark storage dirty and increment
+  `prometheus_local_storage_persist_errors_total` on all relevant errors.
+* [BUGFIX] Propagate storage errors as 500 in the HTTP API.
+* [BUGFIX] Fix int64 overflow in timestamps in the HTTP API.
+* [BUGFIX] Fix deadlock in Zookeeper SD.
+* [BUGFIX] Fix fuzzy search problems in the web-UI auto-completion.
+
+## 1.5.3 / 2017-05-11
+
+* [BUGFIX] Fix potential memory leak in Kubernetes service discovery
+
+## 1.5.2 / 2017-02-10
+
+* [BUGFIX] Fix series corruption in a special case of series maintenance where
+  the minimum series-file-shrink-ratio kicks in.
+* [BUGFIX] Fix two panic conditions both related to processing a series
+  scheduled to be quarantined.
+* [ENHANCEMENT] Binaries built with Go1.7.5.
+
 ## 1.5.1 / 2017-02-07
 
 * [BUGFIX] Don't lose fully persisted memory series during checkpointing.

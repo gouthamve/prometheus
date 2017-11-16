@@ -46,7 +46,10 @@ Prometheus.Graph.prototype.initialize = function() {
 
   // Draw graph controls and container from Handlebars template.
 
-  var options = {'pathPrefix': PATH_PREFIX};
+  var options = {
+    'pathPrefix': PATH_PREFIX,
+    'buildVersion': BUILD_VERSION
+  };
   jQuery.extend(options, self.options);
   self.graphHTML = $(Mustache.render(graphTemplate, options));
   self.el.append(self.graphHTML);
@@ -117,6 +120,7 @@ Prometheus.Graph.prototype.initialize = function() {
     showTodayButton: true,
     showClear: true,
     showClose: true,
+    timeZone: 'UTC',
   });
   if (self.options.end_input) {
     self.endDate.data('DateTimePicker').date(self.options.end_input);
@@ -178,11 +182,41 @@ Prometheus.Graph.prototype.initialize = function() {
     return false;
   });
 
+  self.checkTimeDrift();
   self.populateInsertableMetrics();
 
   if (self.expr.val()) {
     self.submitQuery();
   }
+};
+
+Prometheus.Graph.prototype.checkTimeDrift = function() {
+    var self = this;
+    var browserTime = new Date().getTime() / 1000;
+    $.ajax({
+        method: "GET",
+        url: PATH_PREFIX + "/api/v1/query?query=time()",
+        dataType: "json",
+            success: function(json, textStatus) {
+            if (json.status !== "success") {
+                self.showError("Error querying time.");
+                return;
+            }
+            var serverTime = json.data.result[0];
+            var diff = Math.abs(browserTime - serverTime);
+
+            if (diff >= 30) {
+              $("#graph_wrapper0").prepend(
+                  "<div class=\"alert alert-warning\"><strong>Warning!</strong> Detected " +
+                  diff.toFixed(2) +
+                  " seconds time difference between your browser and the server. Prometheus relies on accurate time and time drift might cause unexpected query results.</div>"
+              );
+            }
+        },
+        error: function() {
+            self.showError("Error loading time.");
+        }
+    });
 };
 
 Prometheus.Graph.prototype.populateInsertableMetrics = function() {
@@ -212,13 +246,12 @@ Prometheus.Graph.prototype.populateInsertableMetrics = function() {
           items: "all",
           matcher: function(item) {
             // If we have result for current query, skip
-            if (!self.fuzzyResult.query || self.fuzzyResult.query !== this.query) {
+            if (self.fuzzyResult.query !== this.query) {
               self.fuzzyResult.query = this.query;
               self.fuzzyResult.map = {};
-              self.fuzzyResult.result = fuzzy.filter(this.query.replace('_', ' '), metrics, {
+              self.fuzzyResult.result = fuzzy.filter(this.query.replace(/ /g, ''), metrics, {
                 pre: '<strong>',
-                post: '</strong>',
-                extract: function(el) { return el.replace('_', ' ') }
+                post: '</strong>'
               });
               self.fuzzyResult.result.forEach(function(r) {
                 self.fuzzyResult.map[r.original] = r;
@@ -237,7 +270,7 @@ Prometheus.Graph.prototype.populateInsertableMetrics = function() {
           },
 
           highlighter: function (item) {
-            return $('<div>' + self.fuzzyResult.map[item].string.replace(' ', '_') + '</div>')
+            return $('<div>' + self.fuzzyResult.map[item].string + '</div>')
           },
         });
         // This needs to happen after attaching the typeahead plugin, as it
@@ -362,7 +395,7 @@ Prometheus.Graph.prototype.submitQuery = function() {
 
   var startTime = new Date().getTime();
   var rangeSeconds = self.parseDuration(self.rangeInput.val());
-  var resolution = self.queryForm.find("input[name=step_input]").val() || Math.max(Math.floor(rangeSeconds / 250), 1);
+  var resolution = parseInt(self.queryForm.find("input[name=step_input]").val()) || Math.max(Math.floor(rangeSeconds / 250), 1);
   var endDate = self.getEndDate() / 1000;
 
   if (self.queryXhr) {
@@ -384,6 +417,7 @@ Prometheus.Graph.prototype.submitQuery = function() {
     url = PATH_PREFIX + "/api/v1/query";
     success = function(json, textStatus) { self.handleConsoleResponse(json, textStatus); };
   }
+  self.params = params;
 
   self.queryXhr = $.ajax({
       method: self.queryForm.attr("method"),
@@ -413,7 +447,15 @@ Prometheus.Graph.prototype.submitQuery = function() {
           return;
         }
         var duration = new Date().getTime() - startTime;
-        self.evalStats.html("Load time: " + duration + "ms <br /> Resolution: " + resolution + "s");
+        var totalTimeSeries = 0;
+        if (xhr.responseJSON.data !== undefined) {
+          if (xhr.responseJSON.data.resultType === "scalar") {
+            totalTimeSeries = 1;
+          } else {
+            totalTimeSeries = xhr.responseJSON.data.result.length;
+          }
+        }
+        self.evalStats.html("Load time: " + duration + "ms <br /> Resolution: " + resolution + "s <br />" + "Total time series: " + totalTimeSeries);
         self.spinner.hide();
       }
   });
@@ -508,7 +550,21 @@ Prometheus.Graph.prototype.transformData = function(json) {
       color: palette.color()
     };
   });
-  Rickshaw.Series.zeroFill(data);
+  data.forEach(function(s) {
+    // Insert nulls for all missing steps.
+    var newSeries = [];
+    var pos = 0;
+    for (var t = self.params.start; t <= self.params.end; t += self.params.step) {
+      // Allow for floating point inaccuracy.
+      if (s.data.length > pos && s.data[pos].x < t + self.params.step / 100) {
+        newSeries.push(s.data[pos]);
+        pos++;
+      } else {
+        newSeries.push({x: t, y: null});
+      }
+    }
+    s.data = newSeries;
+  });
   return data;
 };
 
@@ -553,12 +609,49 @@ Prometheus.Graph.prototype.updateGraph = function() {
     min: "auto",
   });
 
+  // Find and set graph's max/min
+  if (self.isStacked() === true) {
+    // When stacked is toggled
+    var max = 0;
+    self.data.forEach(function(timeSeries) {
+      var currSeriesMax = 0;
+      timeSeries.data.forEach(function(dataPoint) {
+        if (dataPoint.y > currSeriesMax && dataPoint.y != null) {
+          currSeriesMax = dataPoint.y;
+        }
+      });
+      max += currSeriesMax;
+    });
+    self.rickshawGraph.max = max*1.05;
+    self.rickshawGraph.min = 0;
+  } else {
+    var min = Infinity;
+    var max = -Infinity;
+    self.data.forEach(function(timeSeries) {
+      timeSeries.data.forEach(function(dataPoint) {
+        if (dataPoint.y < min && dataPoint.y != null) {
+          min = dataPoint.y;
+        }
+        if (dataPoint.y > max && dataPoint.y != null) {
+          max = dataPoint.y;
+        }
+      });
+    });
+    if (min === max) {
+      self.rickshawGraph.max = max + 1;
+      self.rickshawGraph.min = min - 1;
+    } else {
+      self.rickshawGraph.max = max + (0.1*(Math.abs(max - min)));
+      self.rickshawGraph.min = min - (0.1*(Math.abs(max - min)));
+    }
+  }
+
   var xAxis = new Rickshaw.Graph.Axis.Time({ graph: self.rickshawGraph });
 
   var yAxis = new Rickshaw.Graph.Axis.Y({
     graph: self.rickshawGraph,
     orientation: "left",
-    tickFormat: Rickshaw.Fixtures.Number.formatKMBT,
+    tickFormat: this.formatKMBT,
     element: self.yAxis[0],
   });
 
@@ -670,6 +763,49 @@ Prometheus.Graph.prototype.remove = function() {
   self.handleRemove();
   self.handleChange();
 };
+
+Prometheus.Graph.prototype.formatKMBT = function(y) {
+  var abs_y = Math.abs(y);
+  if (abs_y >= 1e24) {
+    return (y / 1e24).toString() + "Y";
+  } else if (abs_y >= 1e21) {
+    return (y / 1e21).toString() + "Z";
+  } else if (abs_y >= 1e18) {
+    return (y / 1e18).toString() + "E";
+  } else if (abs_y >= 1e15) {
+    return (y / 1e15).toString() + "P";
+  } else if (abs_y >= 1e12) {
+    return (y / 1e12).toString() + "T";
+  } else if (abs_y >= 1e9) {
+    return (y / 1e9).toString() + "G";
+  } else if (abs_y >= 1e6) {
+    return (y / 1e6).toString() + "M";
+  } else if (abs_y >= 1e3) {
+    return (y / 1e3).toString() + "k";
+  } else if (abs_y >= 1) {
+    return y
+  } else if (abs_y === 0) {
+    return y
+  } else if (abs_y <= 1e-24) {
+    return (y / 1e-24).toString() + "y";
+  } else if (abs_y <= 1e-21) {
+    return (y / 1e-21).toString() + "z";
+  } else if (abs_y <= 1e-18) {
+    return (y / 1e-18).toString() + "a";
+  } else if (abs_y <= 1e-15) {
+    return (y / 1e-15).toString() + "f";
+  } else if (abs_y <= 1e-12) {
+    return (y / 1e-12).toString() + "p";
+  } else if (abs_y <= 1e-9) {
+      return (y / 1e-9).toString() + "n";
+  } else if (abs_y <= 1e-6) {
+    return (y / 1e-6).toString() + "µ";
+  } else if (abs_y <=1e-3) {
+    return (y / 1e-3).toString() + "m";
+  } else if (abs_y <= 1) {
+    return y
+  }
+}
 
 function escapeHTML(string) {
   var entityMap = {
@@ -820,7 +956,7 @@ function init() {
   });
 
   $.ajax({
-    url: PATH_PREFIX + "/static/js/graph_template.handlebar",
+    url: PATH_PREFIX + "/static/js/graph_template.handlebar?v=" + BUILD_VERSION,
     success: function(data) {
 
       graphTemplate = data;
@@ -865,7 +1001,7 @@ function redirectToMigratedURL() {
     });
   });
   var query = $.param(queryObject);
-  window.location = "/graph?" + query;
+  window.location = PATH_PREFIX + "/graph?" + query;
 }
 
 $(init);

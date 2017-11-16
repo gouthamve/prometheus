@@ -14,22 +14,25 @@
 package zookeeper
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
 	"time"
 
+	"github.com/go-kit/kit/log"
 	"github.com/prometheus/common/model"
 	"github.com/samuel/go-zookeeper/zk"
-	"golang.org/x/net/context"
 
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/util/strutil"
 	"github.com/prometheus/prometheus/util/treecache"
 )
 
-type ZookeeperDiscovery struct {
+// Discovery implements the TargetProvider interface for discovering
+// targets from Zookeeper.
+type Discovery struct {
 	conn *zk.Conn
 
 	sources map[string]*config.TargetGroup
@@ -37,17 +40,18 @@ type ZookeeperDiscovery struct {
 	updates    chan treecache.ZookeeperTreeCacheEvent
 	treeCaches []*treecache.ZookeeperTreeCache
 
-	parse func(data []byte, path string) (model.LabelSet, error)
+	parse  func(data []byte, path string) (model.LabelSet, error)
+	logger log.Logger
 }
 
-// NewNerveDiscovery returns a new NerveDiscovery for the given config.
-func NewNerveDiscovery(conf *config.NerveSDConfig) *ZookeeperDiscovery {
-	return NewDiscovery(conf.Servers, time.Duration(conf.Timeout), conf.Paths, parseNerveMember)
+// NewNerveDiscovery returns a new Discovery for the given Nerve config.
+func NewNerveDiscovery(conf *config.NerveSDConfig, logger log.Logger) *Discovery {
+	return NewDiscovery(conf.Servers, time.Duration(conf.Timeout), conf.Paths, logger, parseNerveMember)
 }
 
-// NewServersetDiscovery returns a new ServersetDiscovery for the given config.
-func NewServersetDiscovery(conf *config.ServersetSDConfig) *ZookeeperDiscovery {
-	return NewDiscovery(conf.Servers, time.Duration(conf.Timeout), conf.Paths, parseServersetMember)
+// NewServersetDiscovery returns a new Discovery for the given serverset config.
+func NewServersetDiscovery(conf *config.ServersetSDConfig, logger log.Logger) *Discovery {
+	return NewDiscovery(conf.Servers, time.Duration(conf.Timeout), conf.Paths, logger, parseServersetMember)
 }
 
 // NewDiscovery returns a new discovery along Zookeeper parses with
@@ -56,55 +60,62 @@ func NewDiscovery(
 	srvs []string,
 	timeout time.Duration,
 	paths []string,
+	logger log.Logger,
 	pf func(data []byte, path string) (model.LabelSet, error),
-) *ZookeeperDiscovery {
-	conn, _, err := zk.Connect(srvs, time.Duration(timeout))
-	conn.SetLogger(treecache.ZookeeperLogger{})
+) *Discovery {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
+
+	conn, _, err := zk.Connect(srvs, timeout)
+	conn.SetLogger(treecache.NewZookeeperLogger(logger))
 	if err != nil {
 		return nil
 	}
 	updates := make(chan treecache.ZookeeperTreeCacheEvent)
-	sd := &ZookeeperDiscovery{
+	sd := &Discovery{
 		conn:    conn,
 		updates: updates,
 		sources: map[string]*config.TargetGroup{},
 		parse:   pf,
+		logger:  logger,
 	}
 	for _, path := range paths {
-		sd.treeCaches = append(sd.treeCaches, treecache.NewZookeeperTreeCache(conn, path, updates))
+		sd.treeCaches = append(sd.treeCaches, treecache.NewZookeeperTreeCache(conn, path, updates, logger))
 	}
 	return sd
 }
 
 // Run implements the TargetProvider interface.
-func (sd *ZookeeperDiscovery) Run(ctx context.Context, ch chan<- []*config.TargetGroup) {
+func (d *Discovery) Run(ctx context.Context, ch chan<- []*config.TargetGroup) {
 	defer func() {
-		for _, tc := range sd.treeCaches {
+		for _, tc := range d.treeCaches {
 			tc.Stop()
 		}
 		// Drain event channel in case the treecache leaks goroutines otherwise.
-		for range sd.updates {
+		for range d.updates {
 		}
-		sd.conn.Close()
+		d.conn.Close()
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-		case event := <-sd.updates:
+			return
+		case event := <-d.updates:
 			tg := &config.TargetGroup{
 				Source: event.Path,
 			}
 			if event.Data != nil {
-				labelSet, err := sd.parse(*event.Data, event.Path)
+				labelSet, err := d.parse(*event.Data, event.Path)
 				if err == nil {
 					tg.Targets = []model.LabelSet{labelSet}
-					sd.sources[event.Path] = tg
+					d.sources[event.Path] = tg
 				} else {
-					delete(sd.sources, event.Path)
+					delete(d.sources, event.Path)
 				}
 			} else {
-				delete(sd.sources, event.Path)
+				delete(d.sources, event.Path)
 			}
 			select {
 			case <-ctx.Done():

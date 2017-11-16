@@ -58,7 +58,6 @@ func (t *Timer) String() string {
 // A TimerGroup represents a group of timers relevant to a single query.
 type TimerGroup struct {
 	timers map[fmt.Stringer]*Timer
-	child  *TimerGroup
 }
 
 // NewTimerGroup constructs a new TimerGroup.
