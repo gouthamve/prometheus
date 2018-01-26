@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -66,6 +67,7 @@ func NewManager(logger log.Logger) *Manager {
 		targets:        make(map[poolKey]map[string]*targetgroup.Group),
 		discoverCancel: []context.CancelFunc{},
 		ctx:            context.Background(),
+		scheduleUpdate: make(chan bool, 1),
 	}
 }
 
@@ -81,6 +83,9 @@ type Manager struct {
 	targets map[poolKey]map[string]*targetgroup.Group
 	// The sync channels sends the updates in map[targetSetName] where targetSetName is the job value from the scrape config.
 	syncCh chan map[string][]*targetgroup.Group
+
+	// The channel that schedules an update to be sent to a discovery user.
+	scheduleUpdate chan bool
 }
 
 // Run starts the background processing
@@ -137,7 +142,11 @@ func (m *Manager) runProvider(ctx context.Context, poolKey poolKey, updates chan
 				return
 			}
 			m.updateGroup(poolKey, tgs)
-			m.syncCh <- m.allGroups()
+
+			select {
+			case m.scheduleUpdate <- true:
+			default:
+			}
 		}
 	}
 }
@@ -177,6 +186,21 @@ func (m *Manager) allGroups() map[string][]*targetgroup.Group {
 		}
 	}
 	return tSets
+}
+
+func (m *Manager) runUpdater(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			<-m.scheduleUpdate
+			m.syncCh <- m.allGroups()
+		}
+	}
 }
 
 func (m *Manager) providersFromConfig(cfg sd_config.ServiceDiscoveryConfig) map[string]Discoverer {
