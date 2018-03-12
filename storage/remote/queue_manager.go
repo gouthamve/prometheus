@@ -430,14 +430,15 @@ func (s *shards) runShard(i int) {
 	pendingSamples := model.Samples{}
 
 	timer := time.NewTimer(s.qm.cfg.BatchSendDeadline)
-	defer func() {
+	stop := func() {
 		if !timer.Stop() {
 			select {
 			case <-timer.C:
 			default:
 			}
 		}
-	}()
+	}
+	defer stop()
 
 	for {
 		select {
@@ -458,12 +459,7 @@ func (s *shards) runShard(i int) {
 				s.sendSamples(pendingSamples[:s.qm.cfg.MaxSamplesPerSend])
 				pendingSamples = pendingSamples[s.qm.cfg.MaxSamplesPerSend:]
 
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
+				stop()
 				timer.Reset(s.qm.cfg.BatchSendDeadline)
 			}
 
