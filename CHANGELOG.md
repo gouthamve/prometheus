@@ -1,7 +1,10 @@
-## next release
+## 2.2.1 / 2018-03-13
 
-* [CHANGE] `marathon_sd`: use `auth_token` and `auth_token_file` for token-based authentication instead of `bearer_token` and `bearer_token_file` respectively.
-* [ENHANCEMENT] `marathon_sd`: adds support for basic and bearer authentication, plus all other common HTTP client options (TLS config, proxy URL, etc.)
+* [BUGFIX] Fix data loss in TSDB on compaction
+* [BUGFIX] Correctly stop timer in remote-write path
+* [BUGFIX] Fix deadlock triggerd by loading targets page
+* [BUGFIX] Fix incorrect buffering of samples on range selection queries
+* [BUGFIX] Handle large index files on windows properly
 
 ## 2.2.0 / 2018-03-08
 
