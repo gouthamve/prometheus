@@ -372,6 +372,7 @@ func main() {
 
 	var g group.Group
 	{
+		// Termination handler.
 		term := make(chan os.Signal)
 		signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 		cancel := make(chan struct{})
@@ -397,6 +398,7 @@ func main() {
 		)
 	}
 	{
+		// Scrape discovery manager.
 		g.Add(
 			func() error {
 				err := discoveryManagerScrape.Run()
@@ -410,6 +412,7 @@ func main() {
 		)
 	}
 	{
+		// Notify discovery manager.
 		g.Add(
 			func() error {
 				err := discoveryManagerNotify.Run()
@@ -423,6 +426,7 @@ func main() {
 		)
 	}
 	{
+		// Scrape manager.
 		g.Add(
 			func() error {
 				// When the scrape manager receives a new targets list
@@ -444,6 +448,8 @@ func main() {
 		)
 	}
 	{
+		// Reload handler.
+
 		// Make sure that sighup handler is registered with a redirect to the channel before the potentially
 		// long and synchronous tsdb init.
 		hup := make(chan os.Signal)
@@ -478,6 +484,7 @@ func main() {
 		)
 	}
 	{
+		// Initial configuration loading.
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -507,6 +514,7 @@ func main() {
 		)
 	}
 	{
+		// TSDB.
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -537,6 +545,7 @@ func main() {
 		)
 	}
 	{
+		// Web handler.
 		g.Add(
 			func() error {
 				if err := webHandler.Run(ctxWeb); err != nil {
@@ -553,6 +562,8 @@ func main() {
 		)
 	}
 	{
+		// Rule manager.
+
 		// TODO(krasi) refactor ruleManager.Run() to be blocking to avoid using an extra blocking channel.
 		cancel := make(chan struct{})
 		g.Add(
@@ -568,6 +579,8 @@ func main() {
 		)
 	}
 	{
+		// Notifier.
+
 		// Calling notifier.Stop() before ruleManager.Stop() will cause a panic if the ruleManager isn't running,
 		// so keep this interrupt after the ruleManager.Stop().
 		g.Add(
