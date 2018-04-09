@@ -86,6 +86,8 @@ func main() {
 		localStoragePath string
 		notifier         notifier.Options
 		notifierTimeout  model.Duration
+		outageTolerance  model.Duration
+		forGracePeriod   model.Duration
 		web              web.Options
 		tsdb             tsdb.Options
 		lookbackDelta    model.Duration
@@ -165,6 +167,12 @@ func main() {
 
 	a.Flag("alertmanager.timeout", "Timeout for sending alerts to Alertmanager.").
 		Default("10s").SetValue(&cfg.notifierTimeout)
+
+	a.Flag("alertmanager.outage-tolerance", "Max time to tolerate prometheus outage for restoring 'for' state of alert.").
+		Default("1h").SetValue(&cfg.outageTolerance)
+
+	a.Flag("alertmanager.for-grace-period", "Minimum duration between alert and restored 'for' state. This is maintained only for alerts with configured 'for' time greater than grace period.").
+		Default("10m").SetValue(&cfg.forGracePeriod)
 
 	a.Flag("query.lookback-delta", "The delta difference allowed for retrieving metrics during expression evaluations.").
 		Default("5m").SetValue(&cfg.lookbackDelta)
@@ -248,13 +256,16 @@ func main() {
 		)
 
 		ruleManager = rules.NewManager(&rules.ManagerOptions{
-			Storage:     fanoutStorage,
-			QueryFunc:   rules.EngineQueryFunc(queryEngine, fanoutStorage),
-			NotifyFunc:  sendAlerts(notifier, cfg.web.ExternalURL.String()),
-			Context:     ctxRule,
-			ExternalURL: cfg.web.ExternalURL,
-			Registerer:  prometheus.DefaultRegisterer,
-			Logger:      log.With(logger, "component", "rule manager"),
+			Appendable:      fanoutStorage,
+			TSDB:            localStorage,
+			QueryFunc:       rules.EngineQueryFunc(queryEngine, fanoutStorage),
+			NotifyFunc:      sendAlerts(notifier, cfg.web.ExternalURL.String()),
+			Context:         ctxRule,
+			ExternalURL:     cfg.web.ExternalURL,
+			Registerer:      prometheus.DefaultRegisterer,
+			Logger:          log.With(logger, "component", "rule manager"),
+			OutageTolerance: time.Duration(cfg.outageTolerance),
+			ForGracePeriod:  time.Duration(cfg.forGracePeriod),
 		})
 	)
 
