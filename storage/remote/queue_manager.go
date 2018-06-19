@@ -505,38 +505,27 @@ func (s *shards) runShard(i int) {
 
 func (s *shards) sendSamples(samples model.Samples) {
 	begin := time.Now()
+
 	s.sendSamplesWithBackoff(samples)
 
 	// These counters are used to calculate the dynamic sharding, and as such
 	// should be maintained irrespective of success or failure.
 	s.qm.samplesOut.incr(int64(len(samples)))
 	s.qm.samplesOutDuration.incr(int64(time.Since(begin)))
+
 }
 
 // sendSamples to the remote storage with backoff for recoverable errors.
 func (s *shards) sendSamplesWithBackoff(samples model.Samples) {
-	backoff := s.qm.cfg.MinBackoff
 	req := ToWriteRequest(samples)
 
-	for retries := s.qm.cfg.MaxRetries; retries > 0; retries-- {
-		begin := time.Now()
-		err := s.qm.client.Store(s.ctx, req)
+	begin := time.Now()
+	err := s.qm.client.Store(s.ctx, req)
+	sentBatchDuration.WithLabelValues(s.qm.queueName).Observe(time.Since(begin).Seconds())
 
-		sentBatchDuration.WithLabelValues(s.qm.queueName).Observe(time.Since(begin).Seconds())
-		if err == nil {
-			succeededSamplesTotal.WithLabelValues(s.qm.queueName).Add(float64(len(samples)))
-			return
-		}
-
-		level.Warn(s.qm.logger).Log("msg", "Error sending samples to remote storage", "count", len(samples), "err", err)
-		if _, ok := err.(recoverableError); !ok {
-			break
-		}
-		time.Sleep(backoff)
-		backoff = backoff * 2
-		if backoff > s.qm.cfg.MaxBackoff {
-			backoff = s.qm.cfg.MaxBackoff
-		}
+	if err == nil {
+		succeededSamplesTotal.WithLabelValues(s.qm.queueName).Add(float64(len(samples)))
+		return
 	}
 
 	failedSamplesTotal.WithLabelValues(s.qm.queueName).Add(float64(len(samples)))

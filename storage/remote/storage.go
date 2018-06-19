@@ -66,10 +66,15 @@ func (s *Storage) ApplyConfig(conf *config.Config) error {
 	// TODO: we should only stop & recreate queues which have changes,
 	// as this can be quite disruptive.
 	for i, rwConf := range conf.RemoteWriteConfigs {
-		c, err := NewClient(i, &ClientConfig{
+		c, err := NewClient(s.logger, i, &ClientConfig{
 			URL:              rwConf.URL,
 			Timeout:          rwConf.RemoteTimeout,
 			HTTPClientConfig: rwConf.HTTPClientConfig,
+			RetryConfig: &RetryConfig{
+				MaxRetries: rwConf.QueueConfig.MaxRetries,
+				MinBackoff: rwConf.QueueConfig.MinBackoff,
+				MaxBackoff: rwConf.QueueConfig.MaxBackoff,
+			},
 		})
 		if err != nil {
 			return err
@@ -97,7 +102,7 @@ func (s *Storage) ApplyConfig(conf *config.Config) error {
 
 	s.queryables = make([]storage.Queryable, 0, len(conf.RemoteReadConfigs))
 	for i, rrConf := range conf.RemoteReadConfigs {
-		c, err := NewClient(i, &ClientConfig{
+		c, err := NewClient(s.logger, i, &ClientConfig{
 			URL:              rrConf.URL,
 			Timeout:          rrConf.RemoteTimeout,
 			HTTPClientConfig: rrConf.HTTPClientConfig,

@@ -23,6 +23,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-kit/kit/log"
+	"github.com/go-kit/kit/log/level"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/prometheus/common/model"
@@ -40,6 +42,10 @@ type Client struct {
 	url     *config_util.URL
 	client  *http.Client
 	timeout time.Duration
+
+	logger log.Logger
+
+	retryConfig *RetryConfig
 }
 
 // ClientConfig configures a Client.
@@ -47,21 +53,55 @@ type ClientConfig struct {
 	URL              *config_util.URL
 	Timeout          model.Duration
 	HTTPClientConfig config_util.HTTPClientConfig
+	RetryConfig      *RetryConfig
 }
 
+// RetryConfig is for exponential backoff retries.
+type RetryConfig struct {
+	MaxRetries int
+
+	// On recoverable errors, backoff exponentially.
+	MinBackoff time.Duration
+	MaxBackoff time.Duration
+}
+
+var (
+	defaultRetryConfig = &RetryConfig{
+		MaxRetries: 3,
+		MinBackoff: 30 * time.Millisecond,
+		MaxBackoff: 100 * time.Millisecond,
+	}
+)
+
 // NewClient creates a new Client.
-func NewClient(index int, conf *ClientConfig) (*Client, error) {
+func NewClient(l log.Logger, index int, conf *ClientConfig) (*Client, error) {
 	httpClient, err := config_util.NewClientFromConfig(conf.HTTPClientConfig, "remote_storage")
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{
-		index:   index,
-		url:     conf.URL,
-		client:  httpClient,
-		timeout: time.Duration(conf.Timeout),
-	}, nil
+	rc := conf.RetryConfig
+	if rc == nil {
+		rc = defaultRetryConfig
+	}
+
+	c := &Client{
+		index:       index,
+		url:         conf.URL,
+		client:      httpClient,
+		timeout:     time.Duration(conf.Timeout),
+		retryConfig: rc,
+	}
+
+	if l == nil {
+		l = log.NewNopLogger()
+	} else {
+		l = log.With(l, "queue", c.Name())
+	}
+
+	c.logger = l
+
+	return c, nil
 }
 
 type recoverableError struct {
@@ -76,7 +116,30 @@ func (c *Client) Store(ctx context.Context, req *prompb.WriteRequest) error {
 	}
 
 	compressed := snappy.Encode(nil, data)
-	httpReq, err := http.NewRequest("POST", c.url.String(), bytes.NewReader(compressed))
+
+	backoff := c.retryConfig.MinBackoff
+	for retries := c.retryConfig.MaxRetries; retries > 0; retries-- {
+		err = c.doWriteReq(ctx, compressed)
+		if err == nil {
+			return nil
+		}
+
+		level.Warn(c.logger).Log("msg", "Error sending samples to remote storage", "count", len(req.Timeseries), "err", err)
+		if _, ok := err.(recoverableError); !ok {
+			break
+		}
+		time.Sleep(backoff)
+		backoff = backoff * 2
+		if backoff > c.retryConfig.MaxBackoff {
+			backoff = c.retryConfig.MaxBackoff
+		}
+	}
+
+	return err
+}
+
+func (c *Client) doWriteReq(ctx context.Context, data []byte) error {
+	httpReq, err := http.NewRequest("POST", c.url.String(), bytes.NewReader(data))
 	if err != nil {
 		// Errors from NewRequest are from unparseable URLs, so are not
 		// recoverable.
