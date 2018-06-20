@@ -216,6 +216,11 @@ func (r *AlertingRule) SetRestored(restored bool) {
 	r.restored = restored
 }
 
+// SetRestored updates the restoration state of the alerting rule.
+func (r *AlertingRule) SetRestored(restored bool) {
+	r.restored = restored
+}
+
 // resolvedRetention is the duration for which a resolved alert instance
 // is kept in memory state and consequentally repeatedly sent to the AlertManager.
 const resolvedRetention = 15 * time.Minute

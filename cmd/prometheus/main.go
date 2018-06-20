@@ -86,6 +86,8 @@ func main() {
 		localStoragePath    string
 		notifier            notifier.Options
 		notifierTimeout     model.Duration
+		forGracePeriod      model.Duration
+		outageTolerance     model.Duration
 		web                 web.Options
 		tsdb                tsdb.Options
 		lookbackDelta       model.Duration
