@@ -83,17 +83,18 @@ func main() {
 	cfg := struct {
 		configFile string
 
-		localStoragePath string
-		notifier         notifier.Options
-		notifierTimeout  model.Duration
-		outageTolerance  model.Duration
-		forGracePeriod   model.Duration
-		web              web.Options
-		tsdb             tsdb.Options
-		lookbackDelta    model.Duration
-		webTimeout       model.Duration
-		queryTimeout     model.Duration
-		queryConcurrency int
+		localStoragePath    string
+		notifier            notifier.Options
+		notifierTimeout     model.Duration
+		forGracePeriod      model.Duration
+		outageTolerance     model.Duration
+		web                 web.Options
+		tsdb                tsdb.Options
+		lookbackDelta       model.Duration
+		webTimeout          model.Duration
+		queryTimeout        model.Duration
+		queryConcurrency    int
+		RemoteFlushDeadline model.Duration
 
 		prometheusURL string
 
@@ -161,6 +162,9 @@ func main() {
 
 	a.Flag("storage.tsdb.no-lockfile", "Do not create lockfile in data directory.").
 		Default("false").BoolVar(&cfg.tsdb.NoLockfile)
+
+	a.Flag("storage.remote.flush-deadline", "How long to wait flushing sample on shutdown or config reload.").
+		Default("1m").PlaceHolder("<duration>").SetValue(&cfg.RemoteFlushDeadline)
 
 	a.Flag("alertmanager.notification-queue-capacity", "The capacity of the queue for pending Alertmanager notifications.").
 		Default("10000").IntVar(&cfg.notifier.QueueCapacity)
@@ -230,7 +234,7 @@ func main() {
 
 	var (
 		localStorage  = &tsdb.ReadyStorage{}
-		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), localStorage.StartTime)
+		remoteStorage = remote.NewStorage(log.With(logger, "component", "remote"), localStorage.StartTime, time.Duration(cfg.RemoteFlushDeadline))
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
@@ -372,6 +376,7 @@ func main() {
 
 	var g group.Group
 	{
+		// Termination handler.
 		term := make(chan os.Signal)
 		signal.Notify(term, os.Interrupt, syscall.SIGTERM)
 		cancel := make(chan struct{})
@@ -397,6 +402,7 @@ func main() {
 		)
 	}
 	{
+		// Scrape discovery manager.
 		g.Add(
 			func() error {
 				err := discoveryManagerScrape.Run()
@@ -410,6 +416,7 @@ func main() {
 		)
 	}
 	{
+		// Notify discovery manager.
 		g.Add(
 			func() error {
 				err := discoveryManagerNotify.Run()
@@ -423,6 +430,7 @@ func main() {
 		)
 	}
 	{
+		// Scrape manager.
 		g.Add(
 			func() error {
 				// When the scrape manager receives a new targets list
@@ -444,6 +452,8 @@ func main() {
 		)
 	}
 	{
+		// Reload handler.
+
 		// Make sure that sighup handler is registered with a redirect to the channel before the potentially
 		// long and synchronous tsdb init.
 		hup := make(chan os.Signal)
@@ -478,6 +488,7 @@ func main() {
 		)
 	}
 	{
+		// Initial configuration loading.
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -507,6 +518,7 @@ func main() {
 		)
 	}
 	{
+		// TSDB.
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -537,6 +549,7 @@ func main() {
 		)
 	}
 	{
+		// Web handler.
 		g.Add(
 			func() error {
 				if err := webHandler.Run(ctxWeb); err != nil {
@@ -553,6 +566,8 @@ func main() {
 		)
 	}
 	{
+		// Rule manager.
+
 		// TODO(krasi) refactor ruleManager.Run() to be blocking to avoid using an extra blocking channel.
 		cancel := make(chan struct{})
 		g.Add(
@@ -568,6 +583,8 @@ func main() {
 		)
 	}
 	{
+		// Notifier.
+
 		// Calling notifier.Stop() before ruleManager.Stop() will cause a panic if the ruleManager isn't running,
 		// so keep this interrupt after the ruleManager.Stop().
 		g.Add(

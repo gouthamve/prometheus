@@ -437,7 +437,7 @@ func (h *Handler) Run(ctx context.Context) error {
 		h.options.QueryEngine,
 		h.options.Storage.Querier,
 		func() []*scrape.Target {
-			return h.options.ScrapeManager.Targets()
+			return h.options.ScrapeManager.TargetsActive()
 		},
 		func() []*url.URL {
 			return h.options.Notifier.Alertmanagers()
@@ -659,7 +659,7 @@ func (h *Handler) rules(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) serviceDiscovery(w http.ResponseWriter, r *http.Request) {
 	var index []string
-	targets := h.scrapeManager.TargetMap()
+	targets := h.scrapeManager.TargetsAll()
 	for job := range targets {
 		index = append(index, job)
 	}
@@ -667,17 +667,41 @@ func (h *Handler) serviceDiscovery(w http.ResponseWriter, r *http.Request) {
 	scrapeConfigData := struct {
 		Index   []string
 		Targets map[string][]*scrape.Target
+		Active  []int
+		Dropped []int
+		Total   []int
 	}{
 		Index:   index,
-		Targets: targets,
+		Targets: make(map[string][]*scrape.Target),
+		Active:  make([]int, len(index)),
+		Dropped: make([]int, len(index)),
+		Total:   make([]int, len(index)),
 	}
+	for i, job := range scrapeConfigData.Index {
+		scrapeConfigData.Targets[job] = make([]*scrape.Target, 0, len(targets[job]))
+		scrapeConfigData.Total[i] = len(targets[job])
+		for _, target := range targets[job] {
+			// Do not display more than 100 dropped targets per job to avoid
+			// returning too much data to the clients.
+			if target.Labels().Len() == 0 {
+				scrapeConfigData.Dropped[i]++
+				if scrapeConfigData.Dropped[i] > 100 {
+					continue
+				}
+			} else {
+				scrapeConfigData.Active[i]++
+			}
+			scrapeConfigData.Targets[job] = append(scrapeConfigData.Targets[job], target)
+		}
+	}
+
 	h.executeTemplate(w, "service-discovery.html", scrapeConfigData)
 }
 
 func (h *Handler) targets(w http.ResponseWriter, r *http.Request) {
 	// Bucket targets by job label
 	tps := map[string][]*scrape.Target{}
-	for _, t := range h.scrapeManager.Targets() {
+	for _, t := range h.scrapeManager.TargetsActive() {
 		job := t.Labels().Get(model.JobLabel)
 		tps[job] = append(tps[job], t)
 	}

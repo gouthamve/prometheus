@@ -144,9 +144,11 @@ params:
 
 # Sets the `Authorization` header on every scrape request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <secret> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every scrape request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
@@ -429,7 +431,20 @@ region: <string>
 # The port to scrape metrics from. If using the public IP address, this must
 # instead be specified in the relabeling rule.
 [ port: <int> | default = 80 ]
+
+# Filters can be used optionally to filter the instance list by other criteria.
+# Available filter criteria can be found here:
+# https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_DescribeInstances.html
+# Filter API documentation: https://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_Filter.html
+filters:
+  [ - name: <string>
+      values: <string>, [...] ]
 ```
+
+The [relabeling phase](#relabel_config) is the preferred and more powerful
+way to filter targets based on arbitrary labels. For users with thousands of
+instances it can be more efficient to use the EC2 API directly which has
+support for filtering instances.
 
 ### `<openstack_sd_config>`
 
@@ -564,6 +579,8 @@ address with relabeling.
 The following meta labels are available on targets during [relabeling](#relabel_config):
 
 * `__meta_gce_instance_name`: the name of the instance
+* `__meta_gce_label_<name>`: each GCE label of the instance
+* `__meta_gce_machine_type`: full or partial URL of the machine type of the instance
 * `__meta_gce_metadata_<name>`: each metadata item of the instance
 * `__meta_gce_network`: the network URL of the instance
 * `__meta_gce_private_ip`: the private IP address of the instance
@@ -677,6 +694,8 @@ Available meta labels:
 * `__meta_kubernetes_pod_node_name`: The name of the node the pod is scheduled onto.
 * `__meta_kubernetes_pod_host_ip`: The current host IP of the pod object.
 * `__meta_kubernetes_pod_uid`: The UID of the pod object.
+* `__meta_kubernetes_pod_controller_kind`: Object kind of the pod controller.
+* `__meta_kubernetes_pod_controller_name`: Name of the pod controller.
 
 #### `endpoints`
 
@@ -730,11 +749,13 @@ role: <role>
 # Optional authentication information used to authenticate to the API server.
 # Note that `basic_auth`, `bearer_token` and `bearer_token_file` options are
 # mutually exclusive.
+# password and password_file are mutually exclusive.
 
 # Optional HTTP basic authentication information.
 basic_auth:
   [ username: <string> ]
   [ password: <secret> ]
+  [ password_file: <string> ]
 
 # Optional bearer token authentication information.
 [ bearer_token: <secret> ]
@@ -786,16 +807,44 @@ See below for the configuration options for Marathon discovery:
 servers:
   - <string>
 
-# Optional bearer token authentication information.
-# It is mutually exclusive with `bearer_token_file`.
-[ bearer_token: <secret> ]
-
-# Optional bearer token file authentication information.
-# It is mutually exclusive with `bearer_token`.
-[ bearer_token_file: <filename> ]
-
 # Polling interval
 [ refresh_interval: <duration> | default = 30s ]
+
+# Optional authentication information for token-based authentication
+# https://docs.mesosphere.com/1.11/security/ent/iam-api/#passing-an-authentication-token
+# It is mutually exclusive with `auth_token_file` and other authentication mechanisms.
+[ auth_token: <secret> ]
+
+# Optional authentication information for token-based authentication
+# https://docs.mesosphere.com/1.11/security/ent/iam-api/#passing-an-authentication-token
+# It is mutually exclusive with `auth_token` and other authentication mechanisms.
+[ auth_token_file: <filename> ]
+
+# Sets the `Authorization` header on every request with the
+# configured username and password.
+# This is mutually exclusive with other authentication mechanisms.
+# password and password_file are mutually exclusive.
+basic_auth:
+  [ username: <string> ]
+  [ password: <string> ]
+  [ password_file: <string> ]
+
+# Sets the `Authorization` header on every request with
+# the configured bearer token. It is mutually exclusive with `bearer_token_file` and other authentication mechanisms.
+# NOTE: The current version of DC/OS marathon (v1.11.0) does not support standard Bearer token authentication. Use `auth_token` instead.
+[ bearer_token: <string> ]
+
+# Sets the `Authorization` header on every request with the bearer token
+# read from the configured file. It is mutually exclusive with `bearer_token` and other authentication mechanisms.
+# NOTE: The current version of DC/OS marathon (v1.11.0) does not support standard Bearer token authentication. Use `auth_token_file` instead.
+[ bearer_token_file: /path/to/bearer/token/file ]
+
+# TLS configuration for connecting to marathon servers
+tls_config:
+  [ <tls_config> ]
+
+# Optional proxy URL.
+[ proxy_url: <string> ]
 ```
 
 By default every app listed in Marathon will be scraped by Prometheus. If not all
@@ -1031,9 +1080,11 @@ through the `__alerts_path__` label.
 
 # Sets the `Authorization` header on every request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
@@ -1125,9 +1176,11 @@ write_relabel_configs:
 
 # Sets the `Authorization` header on every remote write request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every remote write request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
@@ -1143,6 +1196,24 @@ tls_config:
 
 # Optional proxy URL.
 [ proxy_url: <string> ]
+
+# Configures the queue used to write to remote storage.
+queue_config:
+  # Number of samples to buffer per shard before we start dropping them.
+  [ capacity: <int> | default = 100000 ]
+  # Maximum number of shards, i.e. amount of concurrency.
+  [ max_shards: <int> | default = 1000 ]
+  # Maximum number of samples per send.
+  [ max_samples_per_send: <int> | default = 100]
+  # Maximum time a sample will wait in buffer.
+  [ batch_send_deadline: <duration> | default = 5s ]
+  # Maximum number of times to retry a batch on recoverable errors.
+  [ max_retries: <int> | default = 10 ]
+  # Initial retry delay. Gets doubled for every retry.
+  [ min_backoff: <duration> | default = 30ms ]
+  # Maximum retry delay.
+  [ max_backoff: <duration> | default = 100ms ]
+
 ```
 
 There is a list of
@@ -1169,9 +1240,11 @@ required_matchers:
 
 # Sets the `Authorization` header on every remote read request with the
 # configured username and password.
+# password and password_file are mutually exclusive.
 basic_auth:
   [ username: <string> ]
   [ password: <string> ]
+  [ password_file: <string> ]
 
 # Sets the `Authorization` header on every remote read request with
 # the configured bearer token. It is mutually exclusive with `bearer_token_file`.
