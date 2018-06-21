@@ -231,6 +231,23 @@ func (g *Group) run(ctx context.Context) {
 
 	iter()
 	if g.shouldRestore {
+		// If we have to restore, we wait for another Eval to finish.
+		// The reason behind this is, during first eval (or before it)
+		// we might not have enough data scraped, and recording rules would not
+		// have updated the latest values, on which some alerts might depend.
+		select {
+		case <-g.done:
+			return
+		case <-tick.C:
+			missed := (time.Since(evalTimestamp) / g.interval) - 1
+			if missed > 0 {
+				iterationsMissed.Add(float64(missed))
+				iterationsScheduled.Add(float64(missed))
+			}
+			evalTimestamp = evalTimestamp.Add((missed + 1) * g.interval)
+			iter()
+		}
+
 		g.RestoreForState(time.Now())
 		g.shouldRestore = false
 	}
@@ -428,12 +445,13 @@ func (g *Group) Eval(ctx context.Context, ts time.Time) {
 // by looking up last ActiveAt from storage.
 func (g *Group) RestoreForState(ts time.Time) {
 	maxtMS := int64(model.TimeFromUnixNano(ts.UnixNano()))
-	// We allow restoration only if alerts were active before some certain time.
+	// We allow restoration only if alerts were active before after certain time.
 	mint := ts.Add(-g.opts.OutageTolerance)
 	mintMS := int64(model.TimeFromUnixNano(mint.UnixNano()))
 	q, err := g.opts.TSDB.Querier(g.opts.Context, mintMS, maxtMS)
 	if err != nil {
 		level.Error(g.logger).Log("msg", "Failed to get Querier", "err", err)
+		return
 	}
 
 	for _, rule := range g.Rules() {
@@ -443,9 +461,14 @@ func (g *Group) RestoreForState(ts time.Time) {
 		}
 
 		alertHoldDuration := alertRule.HoldDuration()
+		if alertHoldDuration < g.opts.ForGracePeriod {
+			// If alertHoldDuration is already less than grace period, we would not 
+			// like to make it wait for `g.opts.ForGracePeriod` time before firing.
+			// Hence we skip restoration, which will make it wait for alertHoldDuration.
+			continue
+		}
 
 		alertRule.ForEachActiveAlert(func(a *Alert) {
-
 			smpl := alertRule.forStateSample(a, time.Now(), 0)
 			var matchers []*labels.Matcher
 			for _, l := range smpl.Metric {
@@ -463,6 +486,9 @@ func (g *Group) RestoreForState(ts time.Time) {
 			seriesFound := false
 			var s storage.Series
 			for sset.Next() {
+				// Query assures that smpl.Metric is included in sset.At().Labels(),
+				// hence just checking the length would act like equality.
+				// (This is faster than calling labels.Compare again as we already have some info).
 				if len(sset.At().Labels()) == len(smpl.Metric) {
 					s = sset.At()
 					seriesFound = true
@@ -475,8 +501,8 @@ func (g *Group) RestoreForState(ts time.Time) {
 			}
 
 			// Series found for the 'for' state.
-			var v float64
 			var t int64
+			var v float64
 			it := s.Iterator()
 			for it.Next() {
 				t, v = it.At()
@@ -490,43 +516,21 @@ func (g *Group) RestoreForState(ts time.Time) {
 				return
 			}
 
-			// v = the latest ActiveAt of the alert.
+			downAt := time.Unix(t/1000, 0)
 			restoredActiveAt := time.Unix(int64(v), 0)
-			crashTime := time.Unix(t/1000, 0)
-			if crashTime.Sub(restoredActiveAt) >= alertHoldDuration {
-				// The alert was firing when it crashed. Hence we need not wait for grace
-				// period, we can immediatly make it fire.
-				a.ActiveAt = restoredActiveAt
-				a.State = StateFiring
-				return
-			}
+			timeSpentPending := downAt.Sub(restoredActiveAt)
+			timeRemainingPending := alertHoldDuration - timeSpentPending
 
-			// This makes sure that the `for` period of the alerting rule is
-			// greater then the grace period. We take application of grace period
-			// into consideration only if this condition is satisfied.
-			shouldWaitForGracePeriod := alertHoldDuration > g.opts.ForGracePeriod
-
-			// restoredActiveAt               ts (current)             firing time = restoredActiveAt.Add(alertHoldDuration)
-			//     |-------------------------------|-------------------------------|
-			//
-			//     ^-----------------------alertHoldDuration-----------------------^
-			//
-			//                                     ^-------------------------------^
-			// 			    					restoredActiveAt.Add(alertHoldDuration).Sub(ts)
-			//
-			// Hence `restoredActiveAt.Add(alertHoldDuration).Sub(ts)` is the time left
-			// for the alert to fire. `shouldWaitForGracePeriod` is true if time
-			// left is less than the grace period.
-			shouldWaitForGracePeriod = shouldWaitForGracePeriod && restoredActiveAt.Add(alertHoldDuration).Sub(ts) < g.opts.ForGracePeriod
-
-			if shouldWaitForGracePeriod {
-				// Now that we have to wait for `ForGracePeriod` amount of time,
-				// this restoration makes it happen. How?
-				//
+			if timeRemainingPending <= 0 {
+				// It means that alert was firing when prometheus went down.
+				// In the next Eval, the state of this alert will be set back to
+				// firing again if it's still firing in that Eval.
+				// Nothing to be done in this case.
+			} else if timeRemainingPending < g.opts.ForGracePeriod {
 				// (new) restoredActiveAt = (ts + m.opts.ForGracePeriod) - alertHoldDuration
 				//                            /* new firing time */      /* moving back by hold duration */
 				//
-				// Proof:
+				// Proof of correctness:
 				// firingTime = restoredActiveAt.Add(alertHoldDuration)
 				//            = ts + m.opts.ForGracePeriod - alertHoldDuration + alertHoldDuration
 				//            = ts + m.opts.ForGracePeriod
@@ -535,7 +539,15 @@ func (g *Group) RestoreForState(ts time.Time) {
 				//                        = (ts + m.opts.ForGracePeriod) - ts
 				//                        = m.opts.ForGracePeriod
 				restoredActiveAt = ts.Add(g.opts.ForGracePeriod).Add(-alertHoldDuration)
+			} else {
+				// By shifting ActiveAt to the future (ActiveAt + some_duration),
+				// the total pending time from the original ActiveAt
+				// would be `alertHoldDuration + some_duration`.
+				// Here, some_duration = downDuration.
+				downDuration := ts.Sub(downAt)
+				restoredActiveAt = restoredActiveAt.Add(downDuration)
 			}
+
 			a.ActiveAt = restoredActiveAt
 			level.Debug(g.logger).Log("msg", "'for' state restored",
 				labels.AlertName, alertRule.Name(), "restored_time", a.ActiveAt.Format(time.RFC850),
@@ -544,7 +556,6 @@ func (g *Group) RestoreForState(ts time.Time) {
 		})
 
 		alertRule.SetRestored(true)
-
 	}
 
 }

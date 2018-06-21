@@ -294,7 +294,6 @@ func (r *AlertingRule) Eval(ctx context.Context, ts time.Time, query QueryFunc, 
 
 		// Check whether we already have alerting state for the identifying label set.
 		// Update the last value and annotations if so, create a new alert entry otherwise.
-
 		if alert, ok := r.active[h]; ok && alert.State != StateInactive {
 			alert.Value = smpl.V
 			alert.Annotations = annotations
