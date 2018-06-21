@@ -604,6 +604,7 @@ func main() {
 	}
 	if err := g.Run(); err != nil {
 		level.Error(logger).Log("err", err)
+		os.Exit(1)
 	}
 	level.Info(logger).Log("msg", "See you next time!")
 }
