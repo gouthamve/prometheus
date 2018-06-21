@@ -355,7 +355,7 @@ func TestForStateRestore(t *testing.T) {
 		ForGracePeriod:  10 * time.Minute,
 	}
 
-	alertForDuration := 20 * time.Minute
+	alertForDuration := 25 * time.Minute
 	// Initial run before prometheus goes down.
 	rule := NewAlertingRule(
 		"HTTPRequestRateLow",
@@ -392,9 +392,10 @@ func TestForStateRestore(t *testing.T) {
 		restoreDuration time.Duration
 		alerts          []*Alert
 
-		num         int
-		noRestore   bool
-		gracePeriod bool
+		num          int
+		noRestore    bool
+		gracePeriod  bool
+		downDuration time.Duration
 	}
 
 	tests := []testInput{
@@ -402,19 +403,12 @@ func TestForStateRestore(t *testing.T) {
 			// Normal restore (alerts were not firing).
 			restoreDuration: 10 * time.Minute,
 			alerts:          rule.ActiveAlerts(),
+			downDuration:    5 * time.Minute,
 		},
 		{
 			// Testing Outage Tolerance.
 			restoreDuration: 40 * time.Minute,
-			alerts:          []*Alert{},
 			noRestore:       true,
-			num:             2,
-		},
-		{
-			// Testing the grace period for firing alerts.
-			restoreDuration: 30 * time.Minute,
-			alerts:          []*Alert{},
-			gracePeriod:     true,
 			num:             2,
 		},
 		{
@@ -430,7 +424,7 @@ func TestForStateRestore(t *testing.T) {
 			expr,
 			alertForDuration,
 			labels.FromStrings("severity", "critical"),
-			nil, true, nil,
+			nil, false, nil,
 		)
 		newGroup := NewGroup("default", "", time.Second, []Rule{newRule}, true, opts)
 
@@ -466,7 +460,7 @@ func TestForStateRestore(t *testing.T) {
 		} else if tst.gracePeriod {
 			testutil.Equals(t, tst.num, len(got))
 			for _, e := range got {
-				testutil.Equals(t, e.ActiveAt.Add(alertForDuration).Sub(restoreTime), opts.ForGracePeriod)
+				testutil.Equals(t, opts.ForGracePeriod, e.ActiveAt.Add(alertForDuration).Sub(restoreTime))
 			}
 		} else {
 			exp := tst.alerts
@@ -476,8 +470,8 @@ func TestForStateRestore(t *testing.T) {
 
 				// Difference in time should be within 1e6 ns, i.e. 1ms
 				// (due to conversion between ns & ms, float64 & int64).
-				activeAtDiff := float64(e.ActiveAt.Unix() - got[i].ActiveAt.Unix())
-				testutil.Assert(t, math.Abs(activeAtDiff) < 1e6, "'for' state restored time is wrong")
+				activeAtDiff := float64(e.ActiveAt.Unix() + int64(tst.downDuration/time.Second) - got[i].ActiveAt.Unix())
+				testutil.Assert(t, math.Abs(activeAtDiff) == 0, "'for' state restored time is wrong")
 			}
 		}
 	}
@@ -486,30 +480,17 @@ func TestForStateRestore(t *testing.T) {
 		testFunc(tst)
 	}
 
-	// Testing if a firing alert remains firing after restoration too.
-
-	furtherRuns := []time.Duration{10 * time.Minute, 15 * time.Minute, 20 * time.Minute, 25 * time.Minute}
-
-	for _, duration := range furtherRuns {
+	// Testing the grace period.
+	for _, duration := range []time.Duration{10 * time.Minute, 15 * time.Minute, 20 * time.Minute} {
 		evalTime := baseTime.Add(duration)
 		group.Eval(suite.Context(), evalTime)
 	}
-
-	exp = rule.ActiveAlerts()
-	for _, aa := range exp {
-		testutil.Assert(t, aa.Labels.Get(model.MetricNameLabel) == "", "%s label set on active alert: %s", model.MetricNameLabel, aa.Labels)
-		testutil.Equals(t, StateFiring, aa.State)
-	}
-	sort.Slice(exp, func(i, j int) bool {
-		return labels.Compare(exp[i].Labels, exp[j].Labels) < 0
-	})
-
-	// Prometheus goes down.
 	testFunc(testInput{
-		restoreDuration: 40 * time.Minute,
-		alerts:          rule.ActiveAlerts(),
+		restoreDuration: 25 * time.Minute,
+		alerts:          []*Alert{},
+		gracePeriod:     true,
+		num:             2,
 	})
-
 }
 
 func TestStaleness(t *testing.T) {
