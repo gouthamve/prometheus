@@ -104,10 +104,7 @@ type AlertingRule struct {
 	// Non-identifying key/value pairs.
 	annotations labels.Labels
 	// Time in seconds taken to evaluate rule.
-	evaluationTime time.Duration
-	// true if old state has been restored. We start persisting samples for ALERT_FOR_STATE
-	// only after the restoration.
-	restored bool
+	evaluationDuration time.Duration
 
 	// Protects the below.
 	mtx sync.Mutex
@@ -159,36 +156,18 @@ func (r *AlertingRule) sample(alert *Alert, ts time.Time) promql.Sample {
 	return s
 }
 
-// forStateSample returns the sample for ALERTS_FOR_STATE.
-func (r *AlertingRule) forStateSample(alert *Alert, ts time.Time, v float64) promql.Sample {
-	lb := labels.NewBuilder(r.labels)
-
-	for _, l := range alert.Labels {
-		lb.Set(l.Name, l.Value)
-	}
-
-	lb.Set(labels.MetricName, alertForStateMetricName)
-	lb.Set(labels.AlertName, r.name)
-
-	s := promql.Sample{
-		Metric: lb.Labels(),
-		Point:  promql.Point{T: timestamp.FromTime(ts), V: v},
-	}
-	return s
-}
-
-// SetEvaluationTime updates evaluationTime to the duration it took to evaluate the rule on its last evaluation.
-func (r *AlertingRule) SetEvaluationTime(dur time.Duration) {
+// SetEvaluationDuration updates evaluationDuration to the duration it took to evaluate the rule on its last evaluation.
+func (r *AlertingRule) SetEvaluationDuration(dur time.Duration) {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
-	r.evaluationTime = dur
+	r.evaluationDuration = dur
 }
 
-// GetEvaluationTime returns the time in seconds it took to evaluate the alerting rule.
-func (r *AlertingRule) GetEvaluationTime() time.Duration {
+// GetEvaluationDuration returns the time in seconds it took to evaluate the alerting rule.
+func (r *AlertingRule) GetEvaluationDuration() time.Duration {
 	r.mtx.Lock()
 	defer r.mtx.Unlock()
-	return r.evaluationTime
+	return r.evaluationDuration
 }
 
 // SetRestored updates the restoration state of the alerting rule.

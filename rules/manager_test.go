@@ -589,7 +589,7 @@ func TestCopyState(t *testing.T) {
 			map[string]labels.Labels{"r3a": nil},
 			map[string]labels.Labels{"r3b": nil},
 		},
-		evaluationTime: time.Second,
+		evaluationDuration: time.Second,
 	}
 	oldGroup.rules[0].(*AlertingRule).active[42] = nil
 	newGroup := &Group{
@@ -615,7 +615,7 @@ func TestCopyState(t *testing.T) {
 	}
 	testutil.Equals(t, want, newGroup.seriesInPreviousEval)
 	testutil.Equals(t, oldGroup.rules[0], newGroup.rules[3])
-	testutil.Equals(t, oldGroup.evaluationTime, newGroup.evaluationTime)
+	testutil.Equals(t, oldGroup.evaluationDuration, newGroup.evaluationDuration)
 }
 
 func TestUpdate(t *testing.T) {
