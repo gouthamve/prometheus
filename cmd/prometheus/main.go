@@ -166,6 +166,12 @@ func main() {
 	a.Flag("storage.remote.flush-deadline", "How long to wait flushing sample on shutdown or config reload.").
 		Default("1m").PlaceHolder("<duration>").SetValue(&cfg.RemoteFlushDeadline)
 
+	a.Flag("rules.alert.for-outage-tolerance", "Max time to tolerate prometheus outage for restoring 'for' state of alert.").
+		Default("1h").SetValue(&cfg.outageTolerance)
+
+	a.Flag("rules.alert.for-grace-period", "Minimum duration between alert and restored 'for' state. This is maintained only for alerts with configured 'for' time greater than grace period.").
+		Default("10m").SetValue(&cfg.forGracePeriod)
+
 	a.Flag("alertmanager.notification-queue-capacity", "The capacity of the queue for pending Alertmanager notifications.").
 		Default("10000").IntVar(&cfg.notifier.QueueCapacity)
 
