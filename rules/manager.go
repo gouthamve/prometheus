@@ -456,6 +456,7 @@ func (g *Group) RestoreForState(ts time.Time) {
 			// If alertHoldDuration is already less than grace period, we would not
 			// like to make it wait for `g.opts.ForGracePeriod` time before firing.
 			// Hence we skip restoration, which will make it wait for alertHoldDuration.
+			alertRule.SetRestored(true)
 			continue
 		}
 
