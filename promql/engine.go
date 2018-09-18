@@ -74,7 +74,7 @@ type (
 	ErrTooManySamples string
 	// ErrStorage is returned if an error was encountered in the storage layer
 	// during query handling.
-	ErrStorage error
+	ErrStorage struct{ error }
 )
 
 func (e ErrQueryTimeout) Error() string {
